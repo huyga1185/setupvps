@@ -1,0 +1,47 @@
+SETUP VPS HELP
+
+Cach chay:
+  sudo bash setup.sh
+
+Menu:
+  1) Cap nhat he thong va cai dat goi can thiet
+     Chay apt update, apt upgrade va cai ufw, fail2ban, ca-certificates, curl, gnupg.
+
+  2) Cai dat Docker
+     Cai Docker Engine va Docker Compose plugin neu may chua co docker.
+
+  3) Cau hinh firewall (ufw)
+     Gioi han OpenSSH, mo port 80/tcp va 443/tcp, sau do bat ufw.
+
+  4) Tao user moi
+     Kiem tra user da ton tai hay chua. Neu chua ton tai thi tao user moi va bat dat password.
+
+  5) Tao/cap quyen sudo cho user
+     Dam bao user ton tai, co password hop le va nam trong group sudo.
+
+  6) Cau hinh tat ca (1-3)
+     Chay update system, cai Docker va cau hinh firewall.
+
+  7) Help
+     Hien thi noi dung file help.txt.
+
+  8) Cai authorized_keys cho user
+     Doc file authorized_keys nam cung thu muc voi setup.sh, kiem tra user ton tai,
+     tu choi neu file rong hoac sai cau truc key SSH, tao thu muc .ssh trong home
+     cua user, copy authorized_keys, set quyen 700/600, sau do xoa file
+     authorized_keys trong repo neu cai dat thanh cong.
+
+  9) Harden SSH login
+     Ghi config SSH de tat login bang username/password va chan root login.
+     Kiem tra user se dung SSH key co authorized_keys hop le truoc khi reload
+     SSH. Nen cai authorized_keys cho user sudo truoc khi chay option nay. Neu
+     reload SSH thanh cong, script se schedule rollback bang systemd trong 60
+     giay va yeu cau thu dang nhap SSH lai. Bam y de giu config moi, bam n hoac
+     khong xac nhan trong 52 giay thi tu rollback. Neu SSH session hien tai bi
+     mat, systemd van giu rollback va shell co the chet theo session. Canh bao:
+     neu dang login bang username/password hoac SSH truc tiep vao root, viec vao
+     lai server se la khong the. Sau khi chay function nay, ban co the phai dang
+     nhap lai SSH. Chon no de huy va quay lai menu.
+
+  0) Thoat
+     Thoat script.
