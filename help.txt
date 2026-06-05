@@ -19,9 +19,6 @@ Menu:
   5) Tao/cap quyen sudo cho user
      Dam bao user ton tai, co password hop le va nam trong group sudo.
 
-  6) Cau hinh tat ca (1-3)
-     Chay update system, cai Docker va cau hinh firewall.
-
   7) Help
      Hien thi noi dung file help.txt.
 
@@ -48,6 +45,39 @@ Menu:
   10) Go user khoi group sudo
      Kiem tra user ton tai va dang nam trong group sudo, sau do go user khoi
      group sudo bang gpasswd hoac deluser.
+
+  11) Cai ufw-docker (chan Docker bypass UFW)
+     Yeu cau Docker va UFW da duoc cai san. Download script ufw-docker (pin theo
+     commit) ve /usr/local/bin/ufw-docker, chay 'ufw-docker install' de patch
+     /etc/ufw/after.rules va /etc/ufw/after6.rules, sau do reload UFW. Sau buoc
+     nay container co port -p se khong tu dong expose ra Internet; muon mo phai
+     dung 'ufw-docker allow <container> <port>'.
+
+  12) Quan ly UFW rules (allow/deny/delete/list)
+     Submenu cho phep allow rule (vd: 8080/tcp, 80:90/udp, 'from 10.0.0.0/8 to
+     any port 22'), deny rule, xoa rule theo so (sau khi xem 'ufw status
+     numbered'), va list rules. Yeu cau UFW da duoc cai dat.
+
+  13) Quan ly ufw-docker rules (allow/delete/list)
+     Submenu cho phep mo port cua mot container ra Internet
+     ('ufw-docker allow <container> <port>'), xoa rule allow cho container
+     (de trong port = xoa het), va list rules ('ufw-docker status'). Yeu cau
+     option 11 da chay.
+
+  14) Cai CrowdSec + firewall bouncer (bao ve SSH)
+     Them CrowdSec repository qua install.crowdsec.net, cai crowdsec va
+     crowdsec-firewall-bouncer-iptables. CrowdSec tu detect openssh-server va
+     enable parser sshd; bouncer auto-register voi agent va enforce decision
+     bang iptables. Sau buoc nay, brute-force SSH se bi block tu /var/log/auth.log.
+     Neu fail2ban dang chay, in canh bao de tranh xung dot. Kiem tra bang:
+     'cscli collections list', 'cscli decisions list', 'cscli metrics'.
+
+  15) Them CrowdSec acquis nginx tu Docker container
+     Yeu cau option 14 va Docker da chay. Hoi ten container, cai collection
+     crowdsecurity/nginx, ghi acquis file
+     /etc/crowdsec/acquis.d/docker-nginx-<container>.yaml (source: docker,
+     labels: nginx) roi reload crowdsec. Container chua chay van OK, CrowdSec
+     se cho. Co the chay nhieu lan voi container khac nhau.
 
   0) Thoat
      Thoat script.

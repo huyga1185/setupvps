@@ -8,6 +8,9 @@ AUTHORIZED_KEYS_FILE="$SCRIPT_DIR/authorized_keys"
 SSHD_CONFIG_FILE="/etc/ssh/sshd_config"
 SSHD_HARDENING_FILE="/etc/ssh/sshd_config.d/01-setupvps-hardening.conf"
 SSHD_HARDENING_LEGACY_FILE="/etc/ssh/sshd_config.d/99-setupvps-hardening.conf"
+UFW_DOCKER_VERSION="78366b6afe6e566cd53f7e55341889c2e3c863e7"
+UFW_DOCKER_URL="https://github.com/chaifeng/ufw-docker/raw/$UFW_DOCKER_VERSION/ufw-docker"
+UFW_DOCKER_BIN="/usr/local/bin/ufw-docker"
 SSH_ROLLBACK_TIMEOUT=60
 SSH_ROLLBACK_CONFIRM_GRACE=8
 SSH_ROLLBACK_CONFIRM_TIMEOUT=$((SSH_ROLLBACK_TIMEOUT > SSH_ROLLBACK_CONFIRM_GRACE ? SSH_ROLLBACK_TIMEOUT - SSH_ROLLBACK_CONFIRM_GRACE : 1))
@@ -19,7 +22,7 @@ if [[ $EUID -ne 0 ]]; then
 	exit 1
 fi
 
-# Related: option 1, option 6
+# Related: option 1
 # Does: Update apt metadata, upgrade packages, and install base VPS packages.
 update_system() {
 	export DEBIAN_FRONTEND=noninteractive
@@ -28,7 +31,7 @@ update_system() {
     echo ">> Update + packages xong"
 }
 
-# Related: option 2, option 6
+# Related: option 2
 # Does: Add Docker apt repository and install Docker Engine/Compose plugin.
 install_docker() {
 	if command -v docker &>/dev/null; then echo ">> Docker da co"; else
@@ -61,13 +64,321 @@ EOF
     fi
 }
 
-# Related: option 3, option 6
+# Related: option 3
 # Does: Configure UFW for SSH, HTTP, and HTTPS traffic.
 ufw_setup() {
 	ufw limit OpenSSH
 	ufw allow 80/tcp
 	ufw allow 443/tcp
 	ufw --force enable
+}
+
+# Related: option 11
+# Does: Install ufw-docker (pinned) and patch UFW to block Docker port bypass.
+install_ufw_docker() {
+	if ! command -v docker &>/dev/null; then
+		echo "Docker chua duoc cai dat. Chay option 2 truoc." >&2
+		return 1
+	fi
+
+	if ! command -v ufw &>/dev/null; then
+		echo "UFW chua duoc cai dat. Chay option 1 hoac option 3 truoc." >&2
+		return 1
+	fi
+
+	echo ">> Download ufw-docker ($UFW_DOCKER_VERSION)..."
+	if ! curl -fsSL --retry 3 -o "$UFW_DOCKER_BIN" "$UFW_DOCKER_URL"; then
+		echo "Download ufw-docker that bai" >&2
+		return 1
+	fi
+	chmod 755 "$UFW_DOCKER_BIN"
+
+	echo ">> Patch /etc/ufw/after.rules de chan Docker bypass..."
+	if ! "$UFW_DOCKER_BIN" install; then
+		echo "ufw-docker install that bai" >&2
+		return 1
+	fi
+
+	if ! ufw reload; then
+		echo "Reload UFW that bai, can kiem tra thu cong" >&2
+		return 1
+	fi
+
+	echo ">> Da cai ufw-docker va patch UFW"
+	echo ">> Port -p cua container se bi block tu Internet. Dung 'ufw-docker allow <container> <port>' de expose."
+}
+
+# Related: option 12
+# Does: Run a ufw allow/deny against a user-provided rule spec.
+ufw_modify_rule() {
+	local action="$1"
+	local rule
+
+	read -rp "Nhap rule (vd: 8080, 8080/tcp, 80:90/udp, 'from 10.0.0.0/8 to any port 22'): " rule
+	if [[ -z "$rule" ]]; then
+		echo "Rule khong duoc de trong" >&2
+		return 1
+	fi
+
+	# shellcheck disable=SC2086
+	if ufw "$action" $rule; then
+		echo ">> Da $action: $rule"
+	else
+		echo "ufw $action $rule that bai" >&2
+		return 1
+	fi
+}
+
+# Related: option 12
+# Does: Show numbered UFW rules and delete the one chosen by the user.
+ufw_delete_rule() {
+	local rule_num
+
+	ufw status numbered
+	read -rp "Nhap so cua rule can xoa: " rule_num
+	if [[ ! "$rule_num" =~ ^[0-9]+$ ]]; then
+		echo "So rule khong hop le" >&2
+		return 1
+	fi
+
+	if ufw --force delete "$rule_num"; then
+		echo ">> Da xoa rule so $rule_num"
+	else
+		echo "Xoa rule that bai" >&2
+		return 1
+	fi
+}
+
+# Related: option 12
+# Does: Submenu to manage UFW rules (allow/deny/delete/list).
+manage_ufw_rules() {
+	local choice
+
+	if ! command -v ufw &>/dev/null; then
+		echo "UFW chua duoc cai dat. Chay option 1 truoc." >&2
+		return 1
+	fi
+
+	while true; do
+		echo
+		echo "Quan ly UFW rules:"
+		echo "1) Allow rule"
+		echo "2) Deny rule"
+		echo "3) Delete rule theo so"
+		echo "4) List rules"
+		echo "0) Quay lai menu chinh"
+		read -rp "Lua chon: " choice
+		case "$choice" in
+			1) ufw_modify_rule allow ;;
+			2) ufw_modify_rule deny ;;
+			3) ufw_delete_rule ;;
+			4) ufw status numbered ;;
+			0) return 0 ;;
+			*) echo "Lua chon khong hop le" >&2 ;;
+		esac
+	done
+}
+
+# Related: option 13
+# Does: Allow a container port through ufw-docker.
+ufw_docker_allow_rule() {
+	local container port
+
+	read -rp "Nhap ten container: " container
+	if [[ -z "$container" ]]; then
+		echo "Ten container khong duoc de trong" >&2
+		return 1
+	fi
+
+	read -rp "Nhap port (vd: 80, 80/tcp, 53/udp): " port
+	if [[ -z "$port" ]]; then
+		echo "Port khong duoc de trong" >&2
+		return 1
+	fi
+
+	if ufw-docker allow "$container" "$port"; then
+		echo ">> Da allow $port cho container $container"
+	else
+		echo "ufw-docker allow that bai" >&2
+		return 1
+	fi
+}
+
+# Related: option 13
+# Does: Remove a ufw-docker allow entry, optionally limited to one port.
+ufw_docker_delete_rule() {
+	local container port
+	local -a args
+
+	read -rp "Nhap ten container: " container
+	if [[ -z "$container" ]]; then
+		echo "Ten container khong duoc de trong" >&2
+		return 1
+	fi
+
+	read -rp "Nhap port (de trong = xoa het cho container): " port
+
+	args=(delete allow "$container")
+	[[ -n "$port" ]] && args+=("$port")
+
+	if ufw-docker "${args[@]}"; then
+		echo ">> Da xoa rule"
+	else
+		echo "ufw-docker delete that bai" >&2
+		return 1
+	fi
+}
+
+# Related: option 13
+# Does: Submenu to manage ufw-docker rules (allow/delete/list).
+manage_ufw_docker() {
+	local choice
+
+	if ! command -v ufw-docker &>/dev/null; then
+		echo "ufw-docker chua duoc cai dat. Chay option 11 truoc." >&2
+		return 1
+	fi
+
+	while true; do
+		echo
+		echo "Quan ly ufw-docker rules:"
+		echo "1) Allow port cho container"
+		echo "2) Delete allow cua container"
+		echo "3) List rules"
+		echo "0) Quay lai menu chinh"
+		read -rp "Lua chon: " choice
+		case "$choice" in
+			1) ufw_docker_allow_rule ;;
+			2) ufw_docker_delete_rule ;;
+			3) ufw-docker status ;;
+			0) return 0 ;;
+			*) echo "Lua chon khong hop le" >&2 ;;
+		esac
+	done
+}
+
+# Related: option 14
+# Does: Install CrowdSec agent + iptables firewall bouncer for SSH protection.
+install_crowdsec_ssh() {
+	local agent_already_installed=0 bouncer_already_installed=0
+
+	if command -v cscli &>/dev/null; then
+		agent_already_installed=1
+	fi
+
+	if dpkg -s crowdsec-firewall-bouncer-iptables &>/dev/null; then
+		bouncer_already_installed=1
+	fi
+
+	if [[ $agent_already_installed -eq 1 && $bouncer_already_installed -eq 1 ]]; then
+		echo ">> CrowdSec va firewall bouncer da duoc cai dat truoc do"
+		cscli collections list 2>/dev/null || true
+		return 0
+	fi
+
+	if [[ $agent_already_installed -eq 0 ]]; then
+		echo ">> Them CrowdSec repository..."
+		if ! curl -sS https://install.crowdsec.net | bash; then
+			echo "Khong them duoc CrowdSec repository" >&2
+			return 1
+		fi
+	fi
+
+	echo ">> Cai dat crowdsec + crowdsec-firewall-bouncer-iptables..."
+	export DEBIAN_FRONTEND=noninteractive
+	if ! apt-get install -y crowdsec crowdsec-firewall-bouncer-iptables; then
+		echo "Khong cai duoc CrowdSec packages" >&2
+		return 1
+	fi
+
+	systemctl enable --now crowdsec >/dev/null 2>&1 || true
+	systemctl enable --now crowdsec-firewall-bouncer >/dev/null 2>&1 || true
+
+	if ! systemctl is-active --quiet crowdsec; then
+		echo "CrowdSec agent khong chay, kiem tra: journalctl -u crowdsec" >&2
+		return 1
+	fi
+
+	if ! systemctl is-active --quiet crowdsec-firewall-bouncer; then
+		echo "CrowdSec firewall bouncer khong chay, kiem tra: journalctl -u crowdsec-firewall-bouncer" >&2
+		return 1
+	fi
+
+	echo ">> CrowdSec + firewall bouncer da chay"
+	echo ">> SSH brute-force se duoc detect tu /var/log/auth.log va auto-block"
+	echo ">> Kiem tra: 'cscli collections list', 'cscli decisions list', 'cscli metrics'"
+
+	if systemctl is-active --quiet fail2ban; then
+		echo "CANH BAO: fail2ban dang chay song song voi CrowdSec, nen tat 1 trong 2 de tranh xung dot" >&2
+	fi
+}
+
+# Related: option 15
+# Does: Configure CrowdSec to ingest nginx logs from a named Docker container.
+add_crowdsec_docker_nginx() {
+	local container acquis_dir acquis_file
+
+	if ! command -v cscli &>/dev/null; then
+		echo "CrowdSec chua duoc cai dat. Chay option 14 truoc." >&2
+		return 1
+	fi
+
+	if ! command -v docker &>/dev/null; then
+		echo "Docker chua duoc cai dat. Chay option 2 truoc." >&2
+		return 1
+	fi
+
+	read -rp "Nhap ten container nginx can theo doi: " container
+	if [[ -z "$container" ]]; then
+		echo "Ten container khong duoc de trong" >&2
+		return 1
+	fi
+
+	if [[ ! "$container" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+		echo "Ten container khong hop le (chi cho phep [a-zA-Z0-9][a-zA-Z0-9_.-]*)" >&2
+		return 1
+	fi
+
+	if ! docker ps -a --format '{{.Names}}' | grep -Fxq "$container"; then
+		echo "CANH BAO: Container '$container' chua ton tai. CrowdSec se cho khi container chay."
+	fi
+
+	echo ">> Cai dat collection crowdsecurity/nginx..."
+	if ! cscli collections install crowdsecurity/nginx; then
+		echo "Khong cai duoc collection crowdsecurity/nginx" >&2
+		return 1
+	fi
+
+	acquis_dir="/etc/crowdsec/acquis.d"
+	install -d -m 0755 "$acquis_dir"
+	acquis_file="$acquis_dir/docker-nginx-${container}.yaml"
+
+	tee "$acquis_file" >/dev/null <<EOF
+# Managed by setupvps/setup.sh
+source: docker
+container_name:
+  - ${container}
+labels:
+  type: nginx
+EOF
+	chmod 0644 "$acquis_file"
+
+	echo ">> Reload CrowdSec..."
+	if ! systemctl reload crowdsec; then
+		if ! systemctl restart crowdsec; then
+			echo "Khong reload/restart duoc crowdsec, kiem tra: journalctl -u crowdsec" >&2
+			return 1
+		fi
+	fi
+
+	if ! systemctl is-active --quiet crowdsec; then
+		echo "CrowdSec khong active sau reload, kiem tra: journalctl -u crowdsec" >&2
+		return 1
+	fi
+
+	echo ">> Da setup CrowdSec doc log nginx tu container '$container'"
+	echo ">> Acquis file: $acquis_file"
+	echo ">> Kiem tra: 'cscli metrics', 'cscli alerts list', 'cscli decisions list'"
 }
 
 # Related: option 4, option 5
@@ -722,6 +1033,9 @@ setup_ssh_hardening() {
 	if [[ -f "$SSHD_HARDENING_FILE" ]]; then
 		hardening_backup_file="$SSHD_HARDENING_FILE.bak.$(date +%Y%m%d%H%M%S)"
 		cp -a "$SSHD_HARDENING_FILE" "$hardening_backup_file"
+	elif [[ -f "$SSHD_HARDENING_LEGACY_FILE" ]]; then
+		hardening_backup_file="$SSHD_HARDENING_FILE.bak.$(date +%Y%m%d%H%M%S)"
+		cp -a "$SSHD_HARDENING_LEGACY_FILE" "$hardening_backup_file"
 	fi
 
 	if [[ -f "$SSHD_CONFIG_FILE" ]]; then
@@ -788,14 +1102,6 @@ EOF
 	echo ">> Giu SSH config moi, quay lai menu"
 }
 
-# Related: option 6
-# Does: Run update, Docker install, and firewall setup in sequence.
-setup() {
-	update_system
-	install_docker
-	ufw_setup
-}
-
 # Related: option 7
 # Does: Print the repo help.txt file.
 show_help() {
@@ -842,26 +1148,34 @@ while true; do
 	echo "3) Cau hinh firewall (ufw)"
 	echo "4) Tao user moi"
 	echo "5) Tao/cap quyen sudo cho user"
-	echo "6) Cau hinh tat ca (1-3)"
-		echo "7) Help"
-		echo "8) Cai authorized_keys cho user"
-		echo "9) Harden SSH login"
-		echo "10) Go user khoi group sudo"
-		echo "0) Thoat"
+	echo "7) Help"
+	echo "8) Cai authorized_keys cho user"
+	echo "9) Harden SSH login"
+	echo "10) Go user khoi group sudo"
+	echo "11) Cai ufw-docker (chan Docker bypass UFW)"
+	echo "12) Quan ly UFW rules (allow/deny/delete/list)"
+	echo "13) Quan ly ufw-docker rules (allow/delete/list)"
+	echo "14) Cai CrowdSec + firewall bouncer (bao ve SSH)"
+	echo "15) Them CrowdSec acquis nginx tu Docker container"
+	echo "0) Thoat"
 
-		read -rp "Lua chon (0-10): " choice
-		case $choice in
-			1) run_option "Cap nhat he thong va cai dat goi can thiet" update_system ;;
-			2) run_option "Cai dat Docker" install_docker ;;
+	read -rp "Lua chon: " choice
+	case $choice in
+		1) run_option "Cap nhat he thong va cai dat goi can thiet" update_system ;;
+		2) run_option "Cai dat Docker" install_docker ;;
 		3) run_option "Cau hinh firewall" ufw_setup ;;
 		4) run_option "Tao user moi" create_user ;;
 		5) run_option "Tao/cap quyen sudo cho user" add_sudoer ;;
-		6) run_option "Cau hinh co ban 1-3" setup ;;
-			7) run_option "Help" show_help ;;
-			8) run_option "Cai authorized_keys cho user" setup_authorized_keys ;;
-			9) run_option "Harden SSH login" setup_ssh_hardening ;;
-			10) run_option "Go user khoi group sudo" remove_sudoer ;;
-			0) echo "Thoat..."; exit 0 ;;
+		7) run_option "Help" show_help ;;
+		8) run_option "Cai authorized_keys cho user" setup_authorized_keys ;;
+		9) run_option "Harden SSH login" setup_ssh_hardening ;;
+		10) run_option "Go user khoi group sudo" remove_sudoer ;;
+		11) run_option "Cai ufw-docker" install_ufw_docker ;;
+		12) run_option "Quan ly UFW rules" manage_ufw_rules ;;
+		13) run_option "Quan ly ufw-docker rules" manage_ufw_docker ;;
+		14) run_option "Cai CrowdSec + firewall bouncer" install_crowdsec_ssh ;;
+		15) run_option "Them CrowdSec acquis nginx tu Docker container" add_crowdsec_docker_nginx ;;
+		0) echo "Thoat..."; exit 0 ;;
 		*)
 			echo "Lua chon khong hop le. Vui long chon lai."
 			pause_then_clear
