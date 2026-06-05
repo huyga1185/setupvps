@@ -63,11 +63,21 @@ Script se:
 
 ## Harden SSH
 
-Option `9` ghi config vao:
+Option `9` ghi config hardening vao:
 
 ```text
 /etc/ssh/sshd_config.d/99-setupvps-hardening.conf
 ```
+
+Script cung se dam bao dong include sau nam o dau `/etc/ssh/sshd_config`:
+
+```sshconfig
+Include /etc/ssh/sshd_config.d/*.conf
+```
+
+Ly do: tren mot so VM/image, `sshd_config` khong include folder
+`sshd_config.d`, hoac include nam sau directive khac. Khi do file hardening co
+the khong co hieu luc va password login van hoat dong.
 
 Config se:
 
@@ -85,6 +95,8 @@ Truoc khi reload SSH, script se:
 - Kiem tra user se dung SSH key co ton tai.
 - Kiem tra `~user/.ssh/authorized_keys` ton tai va hop le.
 - Chay `sshd -t`.
+- Chay `sshd -T` de xac nhan effective config la `PasswordAuthentication no`,
+  `KbdInteractiveAuthentication no`, `PermitRootLogin no`.
 - Schedule rollback guard bang `systemd-run` trong 60 giay.
 - Reload SSH, khong restart, de tranh cat session hien tai.
 

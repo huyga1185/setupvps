@@ -33,8 +33,9 @@ Menu:
 
   9) Harden SSH login
      Ghi config SSH de tat login bang username/password va chan root login.
-     Kiem tra user se dung SSH key co authorized_keys hop le truoc khi reload
-     SSH. Nen cai authorized_keys cho user sudo truoc khi chay option nay. Neu
+     Dam bao sshd_config include file hardening va kiem tra effective config
+     bang sshd -T truoc khi reload SSH. Kiem tra user se dung SSH key co
+     authorized_keys hop le truoc khi reload SSH. Nen cai authorized_keys cho user sudo truoc khi chay option nay. Neu
      reload SSH thanh cong, script se schedule rollback bang systemd trong 60
      giay va yeu cau thu dang nhap SSH lai. Bam y de giu config moi. Bam n thi
      rollback roi quay lai menu. Khong xac nhan trong 52 giay thi tu rollback

@@ -6,7 +6,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 HELP_FILE="$SCRIPT_DIR/help.txt"
 AUTHORIZED_KEYS_FILE="$SCRIPT_DIR/authorized_keys"
 SSHD_CONFIG_FILE="/etc/ssh/sshd_config"
-SSHD_HARDENING_FILE="/etc/ssh/sshd_config.d/99-setupvps-hardening.conf"
+SSHD_HARDENING_FILE="/etc/ssh/sshd_config.d/01-setupvps-hardening.conf"
+SSHD_HARDENING_LEGACY_FILE="/etc/ssh/sshd_config.d/99-setupvps-hardening.conf"
 SSH_ROLLBACK_TIMEOUT=60
 SSH_ROLLBACK_CONFIRM_GRACE=8
 SSH_ROLLBACK_CONFIRM_TIMEOUT=$((SSH_ROLLBACK_TIMEOUT > SSH_ROLLBACK_CONFIRM_GRACE ? SSH_ROLLBACK_TIMEOUT - SSH_ROLLBACK_CONFIRM_GRACE : 1))
@@ -729,6 +730,7 @@ setup_ssh_hardening() {
 	fi
 
 	install -d -m 0755 "$(dirname "$SSHD_HARDENING_FILE")"
+	rm -f "$SSHD_HARDENING_LEGACY_FILE"
 	tee "$SSHD_HARDENING_FILE" >/dev/null <<EOF
 # Managed by setupvps/setup.sh
 PubkeyAuthentication yes
