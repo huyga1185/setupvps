@@ -5,7 +5,7 @@ Cach chay:
 
 Menu:
   1) Cap nhat he thong va cai dat goi can thiet
-     Chay apt update, apt upgrade va cai ufw, fail2ban, ca-certificates, curl, gnupg.
+     Chay apt update, apt upgrade va cai ufw, ca-certificates, curl, gnupg.
 
   2) Cai dat Docker
      Cai Docker Engine va Docker Compose plugin neu may chua co docker.
@@ -36,12 +36,17 @@ Menu:
      Kiem tra user se dung SSH key co authorized_keys hop le truoc khi reload
      SSH. Nen cai authorized_keys cho user sudo truoc khi chay option nay. Neu
      reload SSH thanh cong, script se schedule rollback bang systemd trong 60
-     giay va yeu cau thu dang nhap SSH lai. Bam y de giu config moi, bam n hoac
-     khong xac nhan trong 52 giay thi tu rollback. Neu SSH session hien tai bi
-     mat, systemd van giu rollback va shell co the chet theo session. Canh bao:
+     giay va yeu cau thu dang nhap SSH lai. Bam y de giu config moi. Bam n thi
+     rollback roi quay lai menu. Khong xac nhan trong 52 giay thi tu rollback
+     va thoat script. Neu SSH session hien tai bi mat, systemd van giu rollback.
+     Canh bao:
      neu dang login bang username/password hoac SSH truc tiep vao root, viec vao
      lai server se la khong the. Sau khi chay function nay, ban co the phai dang
      nhap lai SSH. Chon no de huy va quay lai menu.
+
+  10) Go user khoi group sudo
+     Kiem tra user ton tai va dang nam trong group sudo, sau do go user khoi
+     group sudo bang gpasswd hoac deluser.
 
   0) Thoat
      Thoat script.

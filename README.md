@@ -41,6 +41,7 @@ de clear man hinh va quay lai menu.
 7) Help
 8) Cai authorized_keys cho user
 9) Harden SSH login
+10) Go user khoi group sudo
 0) Thoat
 ```
 
@@ -90,9 +91,23 @@ Truoc khi reload SSH, script se:
 Sau khi reload, hay mo terminal moi va thu SSH lai bang user/key da kiem tra.
 
 - Bam `y` trong 52 giay neu dang nhap lai duoc: giu config moi.
-- Bam `n` hoac het 52 giay: rollback config SSH.
+- Bam `n`: rollback config SSH roi quay lai menu.
+- Het 52 giay khong xac nhan: tu rollback config SSH va thoat script.
 - Neu SSH session hien tai bi mat, systemd rollback guard van tu rollback sau 60 giay.
 
 Gioi han: neu server reboot trong cua so rollback 60 giay, transient systemd
 timer va state trong `/run/setupvps` se mat. Truong hop nay hiem trong flow test
 thu cong, nhung can biet.
+
+## Go sudo
+
+Option `10` go user khoi group `sudo`.
+
+Script se:
+
+- Kiem tra user ton tai.
+- Kiem tra group `sudo` ton tai.
+- Kiem tra user co dang nam trong group `sudo` hay khong.
+- Neu co, go user khoi group bang `gpasswd -d user sudo` hoac `deluser user sudo`.
+
+Hay can than khi go sudo cua user dang dung de quan tri server.

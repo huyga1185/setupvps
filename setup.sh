@@ -22,7 +22,7 @@ fi
 update_system() {
 	export DEBIAN_FRONTEND=noninteractive
     apt-get update -y && apt-get upgrade -y
-    apt-get install -y ufw fail2ban ca-certificates curl gnupg
+    apt-get install -y ufw ca-certificates curl gnupg
     echo ">> Update + packages xong"
 }
 
@@ -115,12 +115,28 @@ user_has_password() {
 	[[ -n "$password_hash" && "$password_hash" != "!"* && "$password_hash" != "*"* ]]
 }
 
-# Related: option 4, option 5, option 8, option 9
+# Related: option 4, option 5, option 8, option 9, option 10
 # Does: Check whether a local passwd entry exists for a username.
 user_exists() {
 	local username="$1"
 
 	getent passwd "$username" >/dev/null
+}
+
+# Related: option 10
+# Does: Check whether a user belongs to a specific group.
+user_in_group() {
+	local username="$1"
+	local group_name="$2"
+	local current_group
+
+	for current_group in $(id -nG "$username"); do
+		if [[ "$current_group" == "$group_name" ]]; then
+			return 0
+		fi
+	done
+
+	return 1
 }
 
 # Related: option 8, option 9
@@ -259,6 +275,45 @@ add_sudoer() {
 
 	usermod -aG sudo "$username"
 	echo ">> Da them user $username vao group sudo"
+}
+
+# Related: option 10
+# Does: Remove an existing user from the sudo group.
+remove_sudoer() {
+	local username
+
+	read -rp "Nhap username can go khoi group sudo: " username
+	if [[ -z "$username" ]]; then
+		echo "Username khong duoc de trong" >&2
+		return 1
+	fi
+
+	echo ">> Kiem tra user $username..."
+	if ! user_exists "$username"; then
+		echo "User $username khong ton tai" >&2
+		return 1
+	fi
+
+	if ! getent group sudo >/dev/null; then
+		echo "Group sudo khong ton tai" >&2
+		return 1
+	fi
+
+	if ! user_in_group "$username" sudo; then
+		echo ">> User $username khong nam trong group sudo"
+		return 0
+	fi
+
+	if command -v gpasswd &>/dev/null; then
+		gpasswd -d "$username" sudo
+	elif command -v deluser &>/dev/null; then
+		deluser "$username" sudo
+	else
+		echo "Khong tim thay gpasswd hoac deluser de go user khoi group sudo" >&2
+		return 1
+	fi
+
+	echo ">> Da go user $username khoi group sudo"
 }
 
 # Related: option 8
@@ -489,7 +544,7 @@ EOF
 }
 
 # Related: option 9
-# Does: Ask the user to verify new SSH login and rollback on no/timeout.
+# Does: Ask the user to verify SSH login; manual no returns to menu, timeout exits after rollback.
 confirm_ssh_login_or_rollback() {
 	local backup_file="$1"
 	local marker_file="$2"
@@ -499,7 +554,8 @@ confirm_ssh_login_or_rollback() {
 
 	echo ">> Hay mo terminal moi va thu dang nhap SSH bang user/key vua kiem tra."
 	echo ">> Neu dang nhap duoc, nhap y de giu config moi."
-	echo ">> Neu nhap n hoac het $SSH_ROLLBACK_CONFIRM_TIMEOUT giay khong xac nhan, script se tu rollback SSH config."
+	echo ">> Neu nhap n, script se rollback SSH config roi quay lai menu."
+	echo ">> Neu het $SSH_ROLLBACK_CONFIRM_TIMEOUT giay khong xac nhan, script se tu rollback SSH config roi thoat."
 
 	if read -r -t "$SSH_ROLLBACK_CONFIRM_TIMEOUT" -p "Dang nhap SSH lai duoc? (y/n, timeout ${SSH_ROLLBACK_CONFIRM_TIMEOUT}s rollback): " confirm; then
 		echo
@@ -510,7 +566,7 @@ confirm_ssh_login_or_rollback() {
 				return 0
 				;;
 			n|N|no|NO)
-				echo ">> Ban chon rollback SSH config"
+				echo ">> Ban chon rollback SSH config, sau do quay lai menu"
 				if rollback_ssh_hardening "$backup_file"; then
 					cancel_ssh_rollback_guard "$marker_file" "$guard_script" "$rollback_unit"
 				fi
@@ -527,11 +583,11 @@ confirm_ssh_login_or_rollback() {
 	fi
 
 	echo
-	echo "Het $SSH_ROLLBACK_CONFIRM_TIMEOUT giay chua xac nhan, rollback SSH config"
+	echo "Het $SSH_ROLLBACK_CONFIRM_TIMEOUT giay chua xac nhan, tu rollback SSH config va thoat script"
 	if rollback_ssh_hardening "$backup_file"; then
 		cancel_ssh_rollback_guard "$marker_file" "$guard_script" "$rollback_unit"
 	fi
-	return 1
+	exit 1
 }
 
 # Related: option 9
@@ -635,8 +691,7 @@ EOF
 		return 1
 	fi
 
-	echo ">> Thoat script"
-	exit 0
+	echo ">> Giu SSH config moi, quay lai menu"
 }
 
 # Related: option 6
@@ -694,23 +749,25 @@ while true; do
 	echo "4) Tao user moi"
 	echo "5) Tao/cap quyen sudo cho user"
 	echo "6) Cau hinh tat ca (1-3)"
-	echo "7) Help"
-	echo "8) Cai authorized_keys cho user"
-	echo "9) Harden SSH login"
-	echo "0) Thoat"
+		echo "7) Help"
+		echo "8) Cai authorized_keys cho user"
+		echo "9) Harden SSH login"
+		echo "10) Go user khoi group sudo"
+		echo "0) Thoat"
 
-	read -rp "Lua chon (0-9): " choice
-	case $choice in
-		1) run_option "Cap nhat he thong va cai dat goi can thiet" update_system ;;
-		2) run_option "Cai dat Docker" install_docker ;;
+		read -rp "Lua chon (0-10): " choice
+		case $choice in
+			1) run_option "Cap nhat he thong va cai dat goi can thiet" update_system ;;
+			2) run_option "Cai dat Docker" install_docker ;;
 		3) run_option "Cau hinh firewall" ufw_setup ;;
 		4) run_option "Tao user moi" create_user ;;
 		5) run_option "Tao/cap quyen sudo cho user" add_sudoer ;;
 		6) run_option "Cau hinh co ban 1-3" setup ;;
-		7) run_option "Help" show_help ;;
-		8) run_option "Cai authorized_keys cho user" setup_authorized_keys ;;
-		9) run_option "Harden SSH login" setup_ssh_hardening ;;
-		0) echo "Thoat..."; exit 0 ;;
+			7) run_option "Help" show_help ;;
+			8) run_option "Cai authorized_keys cho user" setup_authorized_keys ;;
+			9) run_option "Harden SSH login" setup_ssh_hardening ;;
+			10) run_option "Go user khoi group sudo" remove_sudoer ;;
+			0) echo "Thoat..."; exit 0 ;;
 		*)
 			echo "Lua chon khong hop le. Vui long chon lai."
 			pause_then_clear
