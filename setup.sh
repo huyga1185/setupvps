@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 HELP_FILE="$SCRIPT_DIR/help.txt"
 AUTHORIZED_KEYS_FILE="$SCRIPT_DIR/authorized_keys"
+SSHD_CONFIG_FILE="/etc/ssh/sshd_config"
 SSHD_HARDENING_FILE="/etc/ssh/sshd_config.d/99-setupvps-hardening.conf"
 SSH_ROLLBACK_TIMEOUT=60
 SSH_ROLLBACK_CONFIRM_GRACE=8
@@ -376,6 +377,67 @@ test_sshd_config() {
 }
 
 # Related: option 9
+# Does: Print effective sshd config with sshd -T.
+get_sshd_effective_config() {
+	if command -v sshd &>/dev/null; then
+		sshd -T
+	elif [[ -x /usr/sbin/sshd ]]; then
+		/usr/sbin/sshd -T
+	else
+		echo "Khong tim thay lenh sshd de doc effective config" >&2
+		return 1
+	fi
+}
+
+# Related: option 9
+# Does: Ensure sshd_config includes drop-ins before other active directives.
+ensure_sshd_dropin_include() {
+	local tmp_file
+
+	if [[ ! -f "$SSHD_CONFIG_FILE" ]]; then
+		echo "Khong tim thay file sshd_config tai: $SSHD_CONFIG_FILE" >&2
+		return 1
+	fi
+
+	tmp_file="$(mktemp)"
+	awk '
+		/^[[:space:]]*Include[[:space:]]+\/etc\/ssh\/sshd_config\.d\/\*\.conf([[:space:]]|$)/ {
+			next
+		}
+
+		{
+			print
+		}
+	' "$SSHD_CONFIG_FILE" >"$tmp_file"
+
+	{
+		echo "Include /etc/ssh/sshd_config.d/*.conf"
+		cat "$tmp_file"
+	} >"$SSHD_CONFIG_FILE"
+	rm -f "$tmp_file"
+}
+
+# Related: option 9
+# Does: Verify hardening values are active in sshd -T output.
+verify_sshd_hardening_effective() {
+	local effective_config
+
+	if ! effective_config="$(get_sshd_effective_config)"; then
+		return 1
+	fi
+
+	if ! printf '%s\n' "$effective_config" | grep -qi '^pubkeyauthentication yes$' ||
+		! printf '%s\n' "$effective_config" | grep -qi '^passwordauthentication no$' ||
+		! printf '%s\n' "$effective_config" | grep -qi '^kbdinteractiveauthentication no$' ||
+		! printf '%s\n' "$effective_config" | grep -qi '^permitrootlogin no$'; then
+		echo "Effective sshd config chua apply dung hardening:" >&2
+		printf '%s\n' "$effective_config" |
+			awk '/^(pubkeyauthentication|passwordauthentication|kbdinteractiveauthentication|permitrootlogin) /' >&2
+		return 1
+	fi
+}
+
+# Related: option 9
 # Does: Reload the SSH service without restarting the current SSH session.
 restart_ssh_service() {
 	if command -v systemctl &>/dev/null; then
@@ -403,14 +465,19 @@ restart_ssh_service() {
 }
 
 # Related: option 9
-# Does: Restore the previous SSH hardening file and reload SSH.
+# Does: Restore the previous SSH hardening/main config and reload SSH.
 rollback_ssh_hardening() {
-	local backup_file="$1"
+	local hardening_backup_file="$1"
+	local sshd_config_backup_file="${2:-}"
 
-	if [[ -n "$backup_file" ]]; then
-		cp -a "$backup_file" "$SSHD_HARDENING_FILE"
+	if [[ -n "$hardening_backup_file" ]]; then
+		cp -a "$hardening_backup_file" "$SSHD_HARDENING_FILE"
 	else
 		rm -f "$SSHD_HARDENING_FILE"
+	fi
+
+	if [[ -n "$sshd_config_backup_file" ]]; then
+		cp -a "$sshd_config_backup_file" "$SSHD_CONFIG_FILE"
 	fi
 
 	if ! test_sshd_config; then
@@ -450,10 +517,11 @@ cancel_ssh_rollback_guard() {
 # Related: option 9
 # Does: Create a systemd transient timer that rolls back SSH config after timeout.
 start_ssh_rollback_guard() {
-	local backup_file="$1"
-	local marker_file="$2"
-	local guard_script="$3"
-	local rollback_unit="$4"
+	local hardening_backup_file="$1"
+	local sshd_config_backup_file="$2"
+	local marker_file="$3"
+	local guard_script="$4"
+	local rollback_unit="$5"
 
 	if ! command -v systemd-run &>/dev/null || ! command -v systemctl &>/dev/null; then
 		rm -f "$marker_file" "$guard_script"
@@ -467,9 +535,11 @@ start_ssh_rollback_guard() {
 #!/bin/bash
 set -u
 
-backup_file="$1"
-marker_file="$2"
-hardening_file="$3"
+hardening_backup_file="$1"
+sshd_config_backup_file="$2"
+marker_file="$3"
+hardening_file="$4"
+sshd_config_file="$5"
 
 # Related: option 9
 # Does: Systemd rollback guard validates restored SSH config.
@@ -512,10 +582,14 @@ if [[ ! -f "$marker_file" ]]; then
 	exit 0
 fi
 
-if [[ -n "$backup_file" && -f "$backup_file" ]]; then
-	cp -a "$backup_file" "$hardening_file"
+if [[ -n "$hardening_backup_file" && -f "$hardening_backup_file" ]]; then
+	cp -a "$hardening_backup_file" "$hardening_file"
 else
 	rm -f "$hardening_file"
+fi
+
+if [[ -n "$sshd_config_backup_file" && -f "$sshd_config_backup_file" ]]; then
+	cp -a "$sshd_config_backup_file" "$sshd_config_file"
 fi
 
 if test_sshd_config; then
@@ -534,7 +608,7 @@ EOF
 		--unit="$rollback_unit" \
 		--on-active="${SSH_ROLLBACK_TIMEOUT}s" \
 		--property=Type=oneshot \
-		"$guard_script" "$backup_file" "$marker_file" "$SSHD_HARDENING_FILE"; then
+		"$guard_script" "$hardening_backup_file" "$sshd_config_backup_file" "$marker_file" "$SSHD_HARDENING_FILE" "$SSHD_CONFIG_FILE"; then
 		rm -f "$marker_file" "$guard_script"
 		echo "Khong schedule duoc rollback guard bang systemd" >&2
 		return 1
@@ -546,10 +620,11 @@ EOF
 # Related: option 9
 # Does: Ask the user to verify SSH login; manual no returns to menu, timeout exits after rollback.
 confirm_ssh_login_or_rollback() {
-	local backup_file="$1"
-	local marker_file="$2"
-	local guard_script="$3"
-	local rollback_unit="$4"
+	local hardening_backup_file="$1"
+	local sshd_config_backup_file="$2"
+	local marker_file="$3"
+	local guard_script="$4"
+	local rollback_unit="$5"
 	local confirm
 
 	echo ">> Hay mo terminal moi va thu dang nhap SSH bang user/key vua kiem tra."
@@ -567,14 +642,14 @@ confirm_ssh_login_or_rollback() {
 				;;
 			n|N|no|NO)
 				echo ">> Ban chon rollback SSH config, sau do quay lai menu"
-				if rollback_ssh_hardening "$backup_file"; then
+				if rollback_ssh_hardening "$hardening_backup_file" "$sshd_config_backup_file"; then
 					cancel_ssh_rollback_guard "$marker_file" "$guard_script" "$rollback_unit"
 				fi
 				return 1
 				;;
 			*)
 				echo "Lua chon khong hop le, rollback SSH config" >&2
-				if rollback_ssh_hardening "$backup_file"; then
+				if rollback_ssh_hardening "$hardening_backup_file" "$sshd_config_backup_file"; then
 					cancel_ssh_rollback_guard "$marker_file" "$guard_script" "$rollback_unit"
 				fi
 				return 1
@@ -584,7 +659,7 @@ confirm_ssh_login_or_rollback() {
 
 	echo
 	echo "Het $SSH_ROLLBACK_CONFIRM_TIMEOUT giay chua xac nhan, tu rollback SSH config va thoat script"
-	if rollback_ssh_hardening "$backup_file"; then
+	if rollback_ssh_hardening "$hardening_backup_file" "$sshd_config_backup_file"; then
 		cancel_ssh_rollback_guard "$marker_file" "$guard_script" "$rollback_unit"
 	fi
 	exit 1
@@ -593,7 +668,7 @@ confirm_ssh_login_or_rollback() {
 # Related: option 9
 # Does: Disable password/root SSH login with validation and guarded rollback.
 setup_ssh_hardening() {
-	local backup_file="" rollback_marker="" rollback_guard_script="" rollback_unit="" confirm username home_dir user_authorized_keys
+	local hardening_backup_file="" sshd_config_backup_file="" rollback_marker="" rollback_guard_script="" rollback_unit="" confirm username home_dir user_authorized_keys
 
 	echo "CANH BAO: Neu ban dang login bang username/password hoac dang SSH truc tiep vao root,"
 	echo "viec chay function nay se khien viec vao lai server la khong the."
@@ -644,8 +719,13 @@ setup_ssh_hardening() {
 	fi
 
 	if [[ -f "$SSHD_HARDENING_FILE" ]]; then
-		backup_file="$SSHD_HARDENING_FILE.bak.$(date +%Y%m%d%H%M%S)"
-		cp -a "$SSHD_HARDENING_FILE" "$backup_file"
+		hardening_backup_file="$SSHD_HARDENING_FILE.bak.$(date +%Y%m%d%H%M%S)"
+		cp -a "$SSHD_HARDENING_FILE" "$hardening_backup_file"
+	fi
+
+	if [[ -f "$SSHD_CONFIG_FILE" ]]; then
+		sshd_config_backup_file="$SSHD_CONFIG_FILE.bak.$(date +%Y%m%d%H%M%S)"
+		cp -a "$SSHD_CONFIG_FILE" "$sshd_config_backup_file"
 	fi
 
 	install -d -m 0755 "$(dirname "$SSHD_HARDENING_FILE")"
@@ -658,9 +738,21 @@ ChallengeResponseAuthentication no
 PermitRootLogin no
 EOF
 
+	if ! ensure_sshd_dropin_include; then
+		echo "Khong dam bao duoc Include cua sshd_config, rollback..." >&2
+		rollback_ssh_hardening "$hardening_backup_file" "$sshd_config_backup_file"
+		return 1
+	fi
+
 	if ! test_sshd_config; then
 		echo "Config SSH khong hop le, rollback..." >&2
-		rollback_ssh_hardening "$backup_file"
+		rollback_ssh_hardening "$hardening_backup_file" "$sshd_config_backup_file"
+		return 1
+	fi
+
+	if ! verify_sshd_hardening_effective; then
+		echo "Hardening SSH chua co hieu luc trong sshd -T, rollback..." >&2
+		rollback_ssh_hardening "$hardening_backup_file" "$sshd_config_backup_file"
 		return 1
 	fi
 
@@ -668,16 +760,16 @@ EOF
 	rollback_marker="$(mktemp "$SSH_ROLLBACK_STATE_DIR/ssh-rollback-marker.XXXXXX")"
 	rollback_guard_script="$(mktemp "$SSH_ROLLBACK_STATE_DIR/ssh-rollback.XXXXXX")"
 	rollback_unit="setupvps-ssh-rollback-$(date +%Y%m%d%H%M%S)-$$"
-	if ! start_ssh_rollback_guard "$backup_file" "$rollback_marker" "$rollback_guard_script" "$rollback_unit"; then
+	if ! start_ssh_rollback_guard "$hardening_backup_file" "$sshd_config_backup_file" "$rollback_marker" "$rollback_guard_script" "$rollback_unit"; then
 		echo "Khong co systemd rollback guard, rollback va huy harden SSH..." >&2
-		rollback_ssh_hardening "$backup_file"
+		rollback_ssh_hardening "$hardening_backup_file" "$sshd_config_backup_file"
 		cancel_ssh_rollback_guard "$rollback_marker" "$rollback_guard_script" "$rollback_unit"
 		return 1
 	fi
 
 	if ! restart_ssh_service; then
 		echo "Reload SSH that bai, rollback..." >&2
-		if rollback_ssh_hardening "$backup_file"; then
+		if rollback_ssh_hardening "$hardening_backup_file" "$sshd_config_backup_file"; then
 			cancel_ssh_rollback_guard "$rollback_marker" "$rollback_guard_script" "$rollback_unit"
 		fi
 		return 1
@@ -687,7 +779,7 @@ EOF
 	echo ">> Da block login vao root qua SSH"
 	echo ">> SSH da reload thanh cong"
 
-	if ! confirm_ssh_login_or_rollback "$backup_file" "$rollback_marker" "$rollback_guard_script" "$rollback_unit"; then
+	if ! confirm_ssh_login_or_rollback "$hardening_backup_file" "$sshd_config_backup_file" "$rollback_marker" "$rollback_guard_script" "$rollback_unit"; then
 		return 1
 	fi
 
